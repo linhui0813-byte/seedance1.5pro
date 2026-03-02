@@ -1,0 +1,49 @@
+# 任务指令：构建“DeepSeek + Edge-TTS + Remotion”全链路视频合成脚本
+
+## 1. 任务背景与目标
+
+在本地的 `product_assets` 文件夹中，目前已经包含了一个产品提取文案（`详情文案.txt`）以及若干个 4 秒左右的 AI 生成短视频片段（`.mp4` 文件）。
+你需要编写一个名为 `video_pipeline.py` 的 Python 脚本，将这些素材自动化串联，最终驱动 Remotion 渲染出一个 30 秒左右、带有动态配音和精准字幕的完整种草视频。
+
+## 2. 核心执行流程与技术要求
+
+### 2.1 步骤一：DeepSeek 生成种草文案
+
+- **读取素材**：读取 `./product_assets/详情文案.txt` 的内容。
+- **调用 API**：使用官方 `openai` 库或其他 HTTP 方式调用 DeepSeek API（模型使用 `deepseek-chat`）。
+- **Prompt 设定**：在系统提示词中，要求模型扮演高级女装种草博主。结合读取到的详情文案，写一段时长约 30 秒（约 120-150 字）的口语化短视频文案。文案需凸显纯羊绒大衣的保暖、版型和高级质感，并自然植入品牌名称“牧蓉旗舰店”。
+- **结果保存**：将生成的纯文案保存到 `./product_assets/种草文案.txt`。
+
+### 2.2 步骤二：Edge-TTS 语音与字幕合成（核心增加）
+
+- **环境依赖**：使用 Python 的 `edge-tts` 库。
+- **读取文案**：读取刚刚生成的 `种草文案.txt`。
+- **合成音频与字幕**：使用音色 `zh-CN-XiaoxiaoNeural`，将文案异步合成为音频文件。**关键要求：在合成音频的同时，必须利用 edge-tts 的 subtitle 功能（例如通过 ****`submaker`**** 或遍历 chunks 提取时间戳）同步生成 VTT 格式的字幕文件**。
+- **结果保存**：
+  - 音频保存为 `./product_assets/voiceover.mp3`
+  - 字幕保存为 `./product_assets/subtitles.vtt`
+- **获取时长**：使用合适的音频库（如 `mutagen` 或通过 `ffprobe`）获取该 MP3 的精确时长（秒），以便后续传递给 Remotion 设定总帧数。
+
+### 2.3 步骤三：准备 Remotion 渲染数据包
+
+- **收集视频片段**：扫描 `product_assets` 目录，获取所有提取出的 `.mp4` 短视频片段的绝对路径列表。
+- **生成 JSON**：构建一个字典，包含以下字段，并保存为 `./product_assets/render_data.json`：
+  - `audioPath`: 语音音频的本地路径。
+  - `subtitlePath`: **刚刚生成的 VTT 字幕文件的本地路径。**
+  - `audioDurationInSeconds`: 获取到的音频精确时长。
+  - `videoClips`: 本地短视频片段的路径数组。
+  - `scriptText`: 种草文案全文。
+
+### 2.4 步骤四：触发 Remotion 渲染
+
+- **执行命令**：使用 Python 的 `subprocess` 模块，执行终端命令调用 Remotion 渲染。
+- **命令格式**：假定 Remotion 工程位于与 Python 脚本同级的 `remotion-project` 文件夹中。执行类似 `npx remotion render src/index.ts Main ./product_assets/final_video.mp4 --props=./product_assets/render_data.json` 的命令。
+- **等待与日志**：实时在控制台打印 Remotion 的渲染进度日志，直到最终输出 `final_video.mp4`。
+
+## 3. 错误处理与代码规范
+
+- 请使用 `asyncio` 来处理 Edge-TTS 的异步调用。
+- 为 DeepSeek API 调用添加环境变量 `DEEPSEEK_API_KEY` 的读取与缺失校验。
+- 添加清晰的 `print` 进度提示，例如“正在生成文案...”、“正在合成语音并提取字幕...”、“正在调用 Remotion 渲染...”。
+- 如果某一步出错（如网络请求失败或缺少本地素材），应捕获异常、打印错误详情并安全退出脚本。
+
