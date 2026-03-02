@@ -62,17 +62,7 @@ const SubtitleOverlay: React.FC<{ vttContent: string }> = ({ vttContent }) => {
   const subtitles = useMemo(() => parseVTTContent(vttContent), [vttContent]);
 
   return (
-    <div
-      style={{
-        position: "absolute",
-        bottom: "10%",
-        left: 0,
-        right: 0,
-        display: "flex",
-        justifyContent: "center",
-        alignItems: "center",
-      }}
-    >
+    <>
       {subtitles.map((sub, index) => (
         <Sequence
           key={index}
@@ -81,20 +71,26 @@ const SubtitleOverlay: React.FC<{ vttContent: string }> = ({ vttContent }) => {
         >
           <div
             style={{
-              maxWidth: "80%",
+              position: "absolute",
+              bottom: "10%",
+              left: "50%",
+              transform: "translateX(-50%)",
+              width: "80%",
+              maxWidth: "900px",
               textAlign: "center",
             }}
           >
             <span
               style={{
                 color: "white",
-                fontSize: 48,
+                fontSize: 72,
                 fontWeight: "bold",
                 fontFamily: "PingFang SC, Microsoft YaHei, sans-serif",
-                lineHeight: 1.4,
-                // 去除背景，添加描边和阴影增强清晰度
+                lineHeight: 1.3,
+                whiteSpace: "pre-wrap",
+                // 描边和阴影增强清晰度
                 textShadow: "0px 4px 10px rgba(0, 0, 0, 0.8), 0px 0px 4px rgba(0, 0, 0, 0.8)",
-                WebkitTextStroke: "1.5px black",
+                WebkitTextStroke: "2px black",
               }}
             >
               {sub.text}
@@ -102,7 +98,7 @@ const SubtitleOverlay: React.FC<{ vttContent: string }> = ({ vttContent }) => {
           </div>
         </Sequence>
       ))}
-    </div>
+    </>
   );
 };
 

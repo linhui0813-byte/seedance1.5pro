@@ -216,9 +216,9 @@ async def synthesize_audio_and_subtitles():
     idx = 1
     pos = 0
 
-    # 按句子分割（简单按句号、问号、感叹号分割）
+    # 按短句分割（加入逗号和顿号，让每段字幕更短，强制单行显示）
     import re
-    sentences = re.split(r'([。！？\n])', script_text)
+    sentences = re.split(r'([，。！？、\n,.\?!])', script_text)
 
     current_time = 0
     for i in range(0, len(sentences) - 1, 2):
@@ -342,6 +342,8 @@ def trigger_remotion_render():
     )
 
     # 构建命令（删除固定端口，添加 Chrome 容错标志）
+    # 构建命令（删除固定端口，添加 Chrome 容错标志）
+    # 构建命令
     cmd = [
         "npx",
         "remotion",
@@ -350,11 +352,14 @@ def trigger_remotion_render():
         "Main",
         str(FINAL_VIDEO_FILE),
         "--props=" + str(RENDER_DATA_FILE),
-        "--browser-executable=/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "--port=3333",      #启用3333端口
+        "--concurrency=1",    # <--- 新增：强制单线程渲染，防止浏览器崩溃
+        "--browser-executable=/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", # <--- 加回本地 Chrome 路径
         "--disable-web-security",
         "--ignore-certificate-errors",
         "--log=verbose",
         "--timeout=120000",
+        # 注意：我删除了 --browser-executable 和 --host，让它用最原生的方式运行
     ]
 
     print(f"  执行命令: {' '.join(cmd)}")
