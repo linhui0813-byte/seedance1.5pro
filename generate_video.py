@@ -93,7 +93,7 @@ def create_and_poll_task(image_path, prompt):
     image_data_uri = image_to_base64_data_uri(image_path)
 
     # 添加默认参数到提示词
-    full_prompt = f"{prompt} --duration 4 --camerafixed false --watermark false"
+    full_prompt = f"{prompt} --duration 5 --camerafixed false --watermark false"
 
     # 创建任务
     create_result = client.content_generation.tasks.create(
