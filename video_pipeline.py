@@ -1,9 +1,12 @@
+import logging
 import random
+import shutil
 import asyncio
 import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
@@ -11,6 +14,13 @@ load_dotenv()
 import edge_tts
 from mutagen.mp3 import MP3
 from openai import OpenAI
+
+# 日志配置
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 # ---------------- 配置 ----------------
 SCRIPT_DIR = Path(__file__).parent
@@ -26,22 +36,51 @@ FINAL_VIDEO_FILE = ASSETS_DIR / "final_video.mp4"
 
 BGM_DIR = ASSETS_DIR / "bgm"
 
+# DeepSeek API 重试配置
+API_MAX_RETRIES = 5
+
+# Chrome 浏览器路径（优先使用环境变量）
+CHROME_EXECUTABLE = os.environ.get(
+    "CHROME_EXECUTABLE",
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+)
+
 # ---------------- 步骤一 ----------------
 def generate_script_with_deepseek():
     print("=" * 50)
     print("步骤一：正在生成种草文案...")
     api_key = os.environ.get("DEEPSEEK_API_KEY")
+    if not api_key:
+        raise ValueError("缺少 DEEPSEEK_API_KEY 环境变量，请检查 .env 文件")
     detail_text = DETAIL_TEXT_FILE.read_text(encoding="utf-8")
-    
-    client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
+
+    client = OpenAI(
+        api_key=api_key,
+        base_url="https://api.deepseek.com",
+        timeout=120.0,    # 读取响应超时 120 秒（默认太短，大响应容易断）
+        max_retries=5,    # SDK 内部重试 5 次
+    )
     system_prompt = "你是一位高级女装种草博主...请写一段约 120-150 字的口语化短视频种草文案。不要使用 emoji，直接输出内容。"
     user_prompt = f"商品详情信息：\n{detail_text}"
 
-    response = client.chat.completions.create(
-        model="deepseek-chat",
-        messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-        max_tokens=500,
-    )
+    # 带重试的 API 调用
+    for attempt in range(API_MAX_RETRIES):
+        try:
+            response = client.chat.completions.create(
+                model="deepseek-chat",
+                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+                max_tokens=500,
+            )
+            break
+        except Exception as e:
+            if attempt < API_MAX_RETRIES - 1:
+                wait = min(2 ** attempt * 5, 60)
+                logger.warning("DeepSeek API 调用失败 (第 %d/%d 次): %s, %d 秒后重试...",
+                               attempt + 1, API_MAX_RETRIES, e, wait)
+                time.sleep(wait)
+            else:
+                raise
+
     script_text = response.choices[0].message.content.strip()
     SCRIPT_TEXT_FILE.write_text(script_text, encoding="utf-8")
     print("  种草文案已生成。")
@@ -121,24 +160,23 @@ def get_video_duration(file_path):
     """提取视频真实时长供 React 循环使用"""
     try:
         cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(file_path)]
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, text=True)
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, text=True, timeout=30)
         return float(result.stdout.strip())
-    except:
-        return 5.0 # 降级容错
+    except Exception as e:
+        logger.warning("无法获取视频时长 (%s): %s, 使用默认 5.0s", file_path, e)
+        return 5.0
 
 def prepare_render_data(audio_duration: float):
     print("=" * 50)
     print("步骤三：准备渲染数据包...")
     assets_dir = REMOTION_PROJECT_DIR / "public" / "assets"
     if assets_dir.exists():
-        import shutil
         shutil.rmtree(assets_dir)
     assets_dir.mkdir(parents=True, exist_ok=True)
 
     video_clips_data = []
     for mp4_file in ASSETS_DIR.glob("*.mp4"):
         if mp4_file.name != "final_video.mp4":
-            import shutil
             shutil.copy2(mp4_file, assets_dir / mp4_file.name)
             dur = get_video_duration(mp4_file)
             video_clips_data.append({"path": f"assets/{mp4_file.name}", "originalDuration": dur})
@@ -154,7 +192,6 @@ def prepare_render_data(audio_duration: float):
         if bgm_files:
             chosen_bgm = random.choice(bgm_files)  # 随机选一首
             print(f"  已随机选取背景音乐: {chosen_bgm.name}")
-            import shutil
             shutil.copy2(chosen_bgm, assets_dir / "current_bgm.mp3") # 统一重命名复制过去
             bgm_relative = "assets/current_bgm.mp3"
     else:
@@ -174,21 +211,26 @@ def prepare_render_data(audio_duration: float):
 def trigger_remotion_render():
     print("=" * 50)
     print("步骤四：触发渲染...")
-    subprocess.run(["npx", "remotion", "clear-cache"], cwd=str(REMOTION_PROJECT_DIR), capture_output=True)
+    subprocess.run(["npx", "remotion", "clear-cache"], cwd=str(REMOTION_PROJECT_DIR), capture_output=True, timeout=60)
 
     cmd = [
         "npx", "remotion", "render", "src/index.ts", "Main", str(FINAL_VIDEO_FILE),
         "--props=" + str(RENDER_DATA_FILE), "--port=3333", "--concurrency=1",
-        "--browser-executable=/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        f"--browser-executable={CHROME_EXECUTABLE}",
         "--disable-web-security", "--ignore-certificate-errors", "--log=verbose", "--timeout=120000"
     ]
     env = os.environ.copy()
     env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
-    env["REMOTION_CHROMIUM_EXECUTABLE_PATH"] = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    env["REMOTION_CHROMIUM_EXECUTABLE_PATH"] = CHROME_EXECUTABLE
 
     process = subprocess.Popen(cmd, cwd=str(REMOTION_PROJECT_DIR), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, env=env)
-    for line in process.stdout: print(f"    {line.rstrip()}")
-    process.wait()
+    try:
+        for line in process.stdout:
+            print(f"    {line.rstrip()}")
+        process.wait(timeout=600)  # 10 分钟超时
+    except subprocess.TimeoutExpired:
+        process.kill()
+        raise TimeoutError("Remotion 渲染超时（10 分钟），已强制终止")
 
 # ---------------- 主干 ----------------
 async def main():

@@ -1,21 +1,37 @@
 import os
 import argparse
 import base64
+import logging
 import ssl
+import time
 import urllib.request
 from dotenv import load_dotenv
 from volcenginesdkarkruntime import Ark
 
-# 忽略 SSL 证书验证
+# 使用 certifi 证书包（如果可用），否则回退到系统默认
 try:
-    _create_unverified_https_context = ssl._create_unverified_context
-except AttributeError:
-    pass
-else:
-    ssl._create_default_https_context = _create_unverified_https_context
+    import certifi
+    ssl_context = ssl.create_default_context(cafile=certifi.where())
+    urllib.request.install_opener(
+        urllib.request.build_opener(urllib.request.HTTPSHandler(context=ssl_context))
+    )
+except ImportError:
+    pass  # certifi 不可用时使用系统默认 SSL 证书
 
 # 加载 .env 文件中的环境变量
 load_dotenv()
+
+# 日志配置
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+# 常量配置
+MAX_POLL_RETRIES = 300       # 轮询最大重试次数（300 * 3s = 15 分钟）
+POLL_INTERVAL_SEC = 3        # 轮询间隔秒数
+API_MAX_RETRIES = 3          # API 调用最大重试次数
 
 # 初始化Ark客户端，从环境变量中读取 API Key
 client = Ark(
@@ -76,48 +92,73 @@ def read_prompt(txt_file_path):
 
 
 def download_video(video_url, output_path):
-    """下载视频到本地"""
-    print(f"    Downloading to: {output_path}")
-    try:
-        urllib.request.urlretrieve(video_url, output_path)
-        print(f"    Downloaded: {output_path}")
-        return True
-    except Exception as e:
-        print(f"    Download failed: {e}")
-        return False
+    """下载视频到本地，带重试"""
+    logger.info("    Downloading to: %s", output_path)
+    for attempt in range(API_MAX_RETRIES):
+        try:
+            urllib.request.urlretrieve(video_url, output_path)
+            logger.info("    Downloaded: %s", output_path)
+            return True
+        except Exception as e:
+            if attempt < API_MAX_RETRIES - 1:
+                wait = min(2 ** attempt * 2, 30)
+                logger.warning("    Download failed (attempt %d/%d): %s, retrying in %ds...",
+                               attempt + 1, API_MAX_RETRIES, e, wait)
+                time.sleep(wait)
+            else:
+                logger.error("    Download failed after %d attempts: %s", API_MAX_RETRIES, e)
+                return False
 
 
 def create_and_poll_task(image_path, prompt):
-    """创建任务并轮询获取结果"""
+    """创建任务并轮询获取结果，带重试和超时保护"""
     # 将图片转换为 Base64 Data URI
     image_data_uri = image_to_base64_data_uri(image_path)
 
     # 添加默认参数到提示词
     full_prompt = f"{prompt} --duration 5 --camerafixed false --watermark false"
 
-    # 创建任务
-    create_result = client.content_generation.tasks.create(
-        model="doubao-seedance-1-5-pro-251215",
-        content=[
-            {
-                "type": "text",
-                "text": full_prompt
-            },
-            {
-                "type": "image_url",
-                "image_url": {
-                    "url": image_data_uri
-                }
-            }
-        ]
-    )
+    # 创建任务（带重试）
+    create_result = None
+    for attempt in range(API_MAX_RETRIES):
+        try:
+            create_result = client.content_generation.tasks.create(
+                model="doubao-seedance-1-5-pro-251215",
+                content=[
+                    {
+                        "type": "text",
+                        "text": full_prompt
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": image_data_uri
+                        }
+                    }
+                ]
+            )
+            break
+        except Exception as e:
+            if attempt < API_MAX_RETRIES - 1:
+                wait = min(2 ** attempt * 2, 30)
+                logger.warning("    Task creation failed (attempt %d/%d): %s, retrying in %ds...",
+                               attempt + 1, API_MAX_RETRIES, e, wait)
+                time.sleep(wait)
+            else:
+                raise
 
     task_id = create_result.id
-    print(f"    Task ID: {task_id}")
+    logger.info("    Task ID: %s", task_id)
 
-    # 轮询任务状态
-    while True:
-        get_result = client.content_generation.tasks.get(task_id=task_id)
+    # 轮询任务状态（带超时保护）
+    for poll_count in range(MAX_POLL_RETRIES):
+        try:
+            get_result = client.content_generation.tasks.get(task_id=task_id)
+        except Exception as e:
+            logger.warning("    Polling error (attempt %d): %s", poll_count + 1, e)
+            time.sleep(POLL_INTERVAL_SEC)
+            continue
+
         status = get_result.status
 
         if status == "succeeded":
@@ -132,8 +173,11 @@ def create_and_poll_task(image_path, prompt):
             raise Exception(f"任务失败: {error_msg}")
 
         else:
-            print(f"    Status: {status}, waiting 3s...")
-            time.sleep(3)
+            logger.info("    Status: %s, waiting %ds... (%d/%d)",
+                        status, POLL_INTERVAL_SEC, poll_count + 1, MAX_POLL_RETRIES)
+            time.sleep(POLL_INTERVAL_SEC)
+
+    raise TimeoutError(f"任务轮询超时: 已等待 {MAX_POLL_RETRIES * POLL_INTERVAL_SEC} 秒, task_id={task_id}")
 
 
 def main():
@@ -144,33 +188,34 @@ def main():
 
     target_dir = args.directory
 
-    print(f"===== 开始扫描目录: {target_dir} =====")
+    logger.info("===== 开始扫描目录: %s =====", target_dir)
 
     # 扫描目录
     image_files, txt_file_path = scan_directory(target_dir)
 
     if not image_files:
-        print("错误: 目录中未找到图片文件 (.jpg, .jpeg, .png)")
+        logger.error("错误: 目录中未找到图片文件 (.jpg, .jpeg, .png)")
         return
 
-    print(f"找到 {len(image_files)} 个图片文件")
-    print(f"提示词文件: {os.path.basename(txt_file_path)}")
+    logger.info("找到 %d 个图片文件", len(image_files))
+    logger.info("提示词文件: %s", os.path.basename(txt_file_path))
 
     # 读取提示词
     prompt = read_prompt(txt_file_path)
-    print(f"提示词内容: {prompt[:50]}..." if len(prompt) > 50 else f"提示词内容: {prompt}")
+    logger.info("提示词内容: %s", prompt[:50] + "..." if len(prompt) > 50 else prompt)
 
     # 输出文件
     output_file = os.path.join(target_dir, 'results.txt')
 
-    # 批量处理
-    print(f"\n===== 开始批量生成视频 =====")
+    # 批量处理（结果先收集，最后一次性写入）
+    logger.info("\n===== 开始批量生成视频 =====")
     success_count = 0
     fail_count = 0
+    results = []
 
     for i, image_path in enumerate(image_files, 1):
         image_name = os.path.basename(image_path)
-        print(f"\n[{i}/{len(image_files)}] Processing: {image_name}")
+        logger.info("\n[%d/%d] Processing: %s", i, len(image_files), image_name)
 
         try:
             video_url = create_and_poll_task(image_path, prompt)
@@ -182,31 +227,30 @@ def main():
 
                 # 下载视频
                 if download_video(video_url, video_output_path):
-                    # 写入结果文件
-                    with open(output_file, 'a', encoding='utf-8') as f:
-                        f.write(f"{image_name},{video_url}\n")
-
-                    print(f"    SUCCESS: {video_output_path}")
+                    results.append(f"{image_name},{video_url}")
+                    logger.info("    SUCCESS: %s", video_output_path)
                     success_count += 1
                 else:
-                    # 下载失败但记录 URL
-                    with open(output_file, 'a', encoding='utf-8') as f:
-                        f.write(f"{image_name},{video_url},DOWNLOAD_FAILED\n")
+                    results.append(f"{image_name},{video_url},DOWNLOAD_FAILED")
                     fail_count += 1
             else:
-                print(f"    FAILED: 无法获取视频 URL")
+                logger.warning("    FAILED: 无法获取视频 URL")
                 fail_count += 1
 
         except Exception as e:
-            print(f"    FAILED: {str(e)}")
+            logger.error("    FAILED on %s: %s", image_name, e, exc_info=True)
             fail_count += 1
             # 继续处理下一个图片
 
-    print(f"\n===== 完成 =====")
-    print(f"成功: {success_count}, 失败: {fail_count}")
-    print(f"结果已保存至: {output_file}")
+    # 一次性写入结果文件
+    if results:
+        with open(output_file, 'a', encoding='utf-8') as f:
+            f.write("\n".join(results) + "\n")
+
+    logger.info("\n===== 完成 =====")
+    logger.info("成功: %d, 失败: %d", success_count, fail_count)
+    logger.info("结果已保存至: %s", output_file)
 
 
 if __name__ == "__main__":
-    import time
     main()

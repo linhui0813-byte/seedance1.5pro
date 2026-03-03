@@ -28,6 +28,7 @@ ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "product_a
 NAV_TIMEOUT_MS = 60_000
 SCROLL_STEP_PX = 1500
 SCROLL_PAUSE_MS = 300
+SCROLL_TIMEOUT_SEC = 300  # 滚动最大超时时间（5 分钟）
 
 # <p> 标签内容提取正则
 P_TAG_RE = re.compile(r'<p[^>]*>(.*?)</p>', re.IGNORECASE | re.DOTALL)
@@ -213,11 +214,19 @@ async def human_scroll(page):
     """
     模拟真人滚动：每次向下 500 像素，停留 1 秒。
     确保所有懒加载内容真实渲染出来，触发详情区的网络请求。
+    带 5 分钟硬超时保护，防止无限挂起。
     """
+    import time as _time
+    start_time = _time.monotonic()
     prev_height = 0
     stale_count = 0
 
     while True:
+        # 硬超时保护
+        if _time.monotonic() - start_time > SCROLL_TIMEOUT_SEC:
+            logger.warning("滚动超时 (%d 秒)，强制结束", SCROLL_TIMEOUT_SEC)
+            break
+
         current_height = await page.evaluate("document.body.scrollHeight")
         scroll_top = await page.evaluate("window.scrollY")
         viewport_height = await page.evaluate("window.innerHeight")
@@ -524,6 +533,9 @@ async def main():
         return
 
     url = sys.argv[1]
+    if not url.startswith(("http://", "https://")):
+        print(f"错误: 无效的 URL '{url}'，必须以 http:// 或 https:// 开头")
+        sys.exit(1)
     await scrape_product(url)
 
 
