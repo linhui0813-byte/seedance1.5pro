@@ -33,11 +33,17 @@ MAX_POLL_RETRIES = 300       # 轮询最大重试次数（300 * 3s = 15 分钟�
 POLL_INTERVAL_SEC = 3        # 轮询间隔秒数
 API_MAX_RETRIES = 3          # API 调用最大重试次数
 
-# 初始化Ark客户端，从环境变量中读取 API Key
-client = Ark(
-    base_url="https://ark.cn-beijing.volces.com/api/v3",
-    api_key=os.environ.get("ARK_API_KEY"),
-)
+# 懒加载 Ark 客户端（避免 import 时因缺少 API Key 而崩溃）
+_client = None
+
+def get_client():
+    global _client
+    if _client is None:
+        _client = Ark(
+            base_url="https://ark.cn-beijing.volces.com/api/v3",
+            api_key=os.environ.get("ARK_API_KEY"),
+        )
+    return _client
 
 
 def get_mime_type(filename):
@@ -65,23 +71,20 @@ def scan_directory(target_dir):
     if not os.path.isdir(target_dir):
         raise ValueError(f"目录不存在: {target_dir}")
 
-    # 查找所有图片文件
+    # 只查找用户上传的图片（upload_ 前缀）
     image_extensions = {'.jpg', '.jpeg', '.png'}
     image_files = []
     for filename in os.listdir(target_dir):
+        if not filename.startswith("upload_"):
+            continue
         ext = os.path.splitext(filename)[1].lower()
         if ext in image_extensions:
             image_files.append(os.path.join(target_dir, filename))
 
-    # 查找单个 txt 文件
-    txt_files = [f for f in os.listdir(target_dir) if f.endswith('.txt')]
-
-    if not txt_files:
-        raise ValueError(f"错误: 目录中未找到 .txt 文件")
-    if len(txt_files) > 1:
-        raise ValueError(f"错误: 目录中发现了多个 .txt 文件 ({len(txt_files)} 个)，请只保留一个")
-
-    txt_file_path = os.path.join(target_dir, txt_files[0])
+    # 查找详情文案文件
+    txt_file_path = os.path.join(target_dir, "详情文案.txt")
+    if not os.path.isfile(txt_file_path):
+        raise ValueError(f"错误: 目录中未找到 详情文案.txt")
     return sorted(image_files), txt_file_path
 
 
@@ -122,7 +125,7 @@ def create_and_poll_task(image_path, prompt):
     create_result = None
     for attempt in range(API_MAX_RETRIES):
         try:
-            create_result = client.content_generation.tasks.create(
+            create_result = get_client().content_generation.tasks.create(
                 model="doubao-seedance-1-5-pro-251215",
                 content=[
                     {
@@ -153,7 +156,7 @@ def create_and_poll_task(image_path, prompt):
     # 轮询任务状态（带超时保护）
     for poll_count in range(MAX_POLL_RETRIES):
         try:
-            get_result = client.content_generation.tasks.get(task_id=task_id)
+            get_result = get_client().content_generation.tasks.get(task_id=task_id)
         except Exception as e:
             logger.warning("    Polling error (attempt %d): %s", poll_count + 1, e)
             time.sleep(POLL_INTERVAL_SEC)

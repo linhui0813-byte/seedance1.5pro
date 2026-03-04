@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import time
+import threading
 from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
@@ -21,6 +22,9 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+# Remotion 渲染锁（防止并发渲染冲突）
+_remotion_render_lock = threading.Lock()
 
 # ---------------- 配置 ----------------
 SCRIPT_DIR = Path(__file__).parent
@@ -46,13 +50,15 @@ CHROME_EXECUTABLE = os.environ.get(
 )
 
 # ---------------- 步骤一 ----------------
-def generate_script_with_deepseek():
+def generate_script_with_deepseek(assets_dir: Path = ASSETS_DIR):
     print("=" * 50)
     print("步骤一：正在生成种草文案...")
     api_key = os.environ.get("DEEPSEEK_API_KEY")
     if not api_key:
         raise ValueError("缺少 DEEPSEEK_API_KEY 环境变量，请检查 .env 文件")
-    detail_text = DETAIL_TEXT_FILE.read_text(encoding="utf-8")
+    detail_text_file = assets_dir / "详情文案.txt"
+    script_text_file = assets_dir / "种草文案.txt"
+    detail_text = detail_text_file.read_text(encoding="utf-8")
 
     client = OpenAI(
         api_key=api_key,
@@ -82,7 +88,7 @@ def generate_script_with_deepseek():
                 raise
 
     script_text = response.choices[0].message.content.strip()
-    SCRIPT_TEXT_FILE.write_text(script_text, encoding="utf-8")
+    script_text_file.write_text(script_text, encoding="utf-8")
     print("  种草文案已生成。")
     return script_text
 
@@ -92,14 +98,17 @@ def format_vtt_time(seconds):
     minutes, secs = divmod(remainder, 60)
     return f"{int(hours):02d}:{int(minutes):02d}:{secs:06.3f}"
 
-async def synthesize_audio_and_subtitles():
+async def synthesize_audio_and_subtitles(assets_dir: Path = ASSETS_DIR):
     print("=" * 50)
     print("步骤二：合成语音与字幕...")
-    script_text = SCRIPT_TEXT_FILE.read_text(encoding="utf-8")
+    script_text_file = assets_dir / "种草文案.txt"
+    audio_file = assets_dir / "voiceover.mp3"
+    subtitle_file = assets_dir / "subtitles.vtt"
+    script_text = script_text_file.read_text(encoding="utf-8")
     communicate = edge_tts.Communicate(script_text, "zh-CN-XiaoxiaoNeural")
     word_boundaries = []
 
-    with open(AUDIO_FILE, "wb") as file:
+    with open(audio_file, "wb") as file:
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
                 file.write(chunk["data"])
@@ -110,7 +119,7 @@ async def synthesize_audio_and_subtitles():
                     "end": (chunk["offset"] + chunk["duration"]) / 10000000
                 })
 
-    audio = MP3(str(AUDIO_FILE))
+    audio = MP3(str(audio_file))
     audio_duration = audio.info.length
     vtt_lines = ["WEBVTT", ""]
     idx = 1
@@ -152,7 +161,7 @@ async def synthesize_audio_and_subtitles():
                 current_sentence = ""
                 sentence_start = -1
 
-    SUBTITLE_FILE.write_text("\n".join(vtt_lines), encoding="utf-8")
+    subtitle_file.write_text("\n".join(vtt_lines), encoding="utf-8")
     return audio_duration
 
 # ---------------- 步骤三 ----------------
@@ -166,71 +175,93 @@ def get_video_duration(file_path):
         logger.warning("无法获取视频时长 (%s): %s, 使用默认 5.0s", file_path, e)
         return 5.0
 
-def prepare_render_data(audio_duration: float):
+def prepare_render_data(audio_duration: float, assets_dir: Path = ASSETS_DIR,
+                        remotion_project_dir: Path = REMOTION_PROJECT_DIR):
     print("=" * 50)
     print("步骤三：准备渲染数据包...")
-    assets_dir = REMOTION_PROJECT_DIR / "public" / "assets"
-    if assets_dir.exists():
-        shutil.rmtree(assets_dir)
-    assets_dir.mkdir(parents=True, exist_ok=True)
+    audio_file = assets_dir / "voiceover.mp3"
+    subtitle_file = assets_dir / "subtitles.vtt"
+    render_data_file = assets_dir / "render_data.json"
+    bgm_dir = assets_dir / "bgm"
 
-    video_clips_data = []
-    for mp4_file in ASSETS_DIR.glob("*.mp4"):
-        if mp4_file.name != "final_video.mp4":
-            shutil.copy2(mp4_file, assets_dir / mp4_file.name)
-            dur = get_video_duration(mp4_file)
-            video_clips_data.append({"path": f"assets/{mp4_file.name}", "originalDuration": dur})
+    remotion_assets_dir = remotion_project_dir / "public" / "assets"
+    if remotion_assets_dir.exists():
+        shutil.rmtree(remotion_assets_dir)
+    remotion_assets_dir.mkdir(parents=True, exist_ok=True)
 
     # 复制主语音
-    if AUDIO_FILE.exists(): shutil.copy2(AUDIO_FILE, assets_dir / "voiceover.mp3")
-    if SUBTITLE_FILE.exists(): shutil.copy2(SUBTITLE_FILE, assets_dir / "subtitles.vtt")
+    if audio_file.exists(): shutil.copy2(audio_file, remotion_assets_dir / "voiceover.mp3")
+    if subtitle_file.exists(): shutil.copy2(subtitle_file, remotion_assets_dir / "subtitles.vtt")
 
-    # --- 新增：随机抽取背景音乐 ---
+    # --- 随机抽取背景音乐 ---
     bgm_relative = ""
-    if BGM_DIR.exists():
-        bgm_files = list(BGM_DIR.glob("*.mp3"))
+    if bgm_dir.exists():
+        bgm_files = list(bgm_dir.glob("*.mp3"))
         if bgm_files:
-            chosen_bgm = random.choice(bgm_files)  # 随机选一首
+            chosen_bgm = random.choice(bgm_files)
             print(f"  已随机选取背景音乐: {chosen_bgm.name}")
-            shutil.copy2(chosen_bgm, assets_dir / "current_bgm.mp3") # 统一重命名复制过去
+            shutil.copy2(chosen_bgm, remotion_assets_dir / "current_bgm.mp3")
             bgm_relative = "assets/current_bgm.mp3"
     else:
         print("  未找到 bgm 文件夹，跳过背景音乐配置。")
 
     # 构建数据包
     render_data = {
-        "audioPath": "assets/voiceover.mp3" if AUDIO_FILE.exists() else "",
-        "bgmPath": bgm_relative,  # <--- 新增这行，传给前端
-        "vttContent": SUBTITLE_FILE.read_text(encoding="utf-8") if SUBTITLE_FILE.exists() else "",
+        "audioPath": "assets/voiceover.mp3" if audio_file.exists() else "",
+        "bgmPath": bgm_relative,
+        "vttContent": subtitle_file.read_text(encoding="utf-8") if subtitle_file.exists() else "",
         "audioDurationInSeconds": audio_duration,
-        "videoClips": video_clips_data,
+        "videoClips": [],
     }
-    RENDER_DATA_FILE.write_text(json.dumps(render_data, ensure_ascii=False, indent=2), encoding="utf-8")
+    render_data_file.write_text(json.dumps(render_data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return render_data_file
 
 # ---------------- 步骤四 ----------------
-def trigger_remotion_render():
+def trigger_remotion_render(assets_dir: Path = ASSETS_DIR,
+                            remotion_project_dir: Path = REMOTION_PROJECT_DIR):
     print("=" * 50)
     print("步骤四：触发渲染...")
-    subprocess.run(["npx", "remotion", "clear-cache"], cwd=str(REMOTION_PROJECT_DIR), capture_output=True, timeout=60)
+    final_video_file = assets_dir / "final_video.mp4"
+    render_data_file = assets_dir / "render_data.json"
+    remotion_assets_dir = remotion_project_dir / "public" / "assets"
+    remotion_assets_dir.mkdir(parents=True, exist_ok=True)
 
-    cmd = [
-        "npx", "remotion", "render", "src/index.ts", "Main", str(FINAL_VIDEO_FILE),
-        "--props=" + str(RENDER_DATA_FILE), "--port=3333", "--concurrency=1",
-        f"--browser-executable={CHROME_EXECUTABLE}",
-        "--disable-web-security", "--ignore-certificate-errors", "--log=verbose", "--timeout=120000"
-    ]
-    env = os.environ.copy()
-    env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
-    env["REMOTION_CHROMIUM_EXECUTABLE_PATH"] = CHROME_EXECUTABLE
+    # 复制生成的视频片段到 Remotion assets 并更新 render_data
+    video_clips_data = []
+    for mp4_file in assets_dir.glob("*.mp4"):
+        if mp4_file.name != "final_video.mp4":
+            shutil.copy2(mp4_file, remotion_assets_dir / mp4_file.name)
+            dur = get_video_duration(mp4_file)
+            video_clips_data.append({"path": f"assets/{mp4_file.name}", "originalDuration": dur})
 
-    process = subprocess.Popen(cmd, cwd=str(REMOTION_PROJECT_DIR), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, env=env)
-    try:
-        for line in process.stdout:
-            print(f"    {line.rstrip()}")
-        process.wait(timeout=600)  # 10 分钟超时
-    except subprocess.TimeoutExpired:
-        process.kill()
-        raise TimeoutError("Remotion 渲染超时（10 分钟），已强制终止")
+    if render_data_file.exists():
+        render_data = json.loads(render_data_file.read_text(encoding="utf-8"))
+        render_data["videoClips"] = video_clips_data
+        render_data_file.write_text(json.dumps(render_data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    with _remotion_render_lock:
+        subprocess.run(["npx", "remotion", "clear-cache"], cwd=str(remotion_project_dir), capture_output=True, timeout=60)
+
+        cmd = [
+            "npx", "remotion", "render", "src/index.ts", "Main", str(final_video_file),
+            "--props=" + str(render_data_file), "--port=3333", "--concurrency=1",
+            f"--browser-executable={CHROME_EXECUTABLE}",
+            "--disable-web-security", "--ignore-certificate-errors", "--log=verbose", "--timeout=120000"
+        ]
+        env = os.environ.copy()
+        env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
+        env["REMOTION_CHROMIUM_EXECUTABLE_PATH"] = CHROME_EXECUTABLE
+
+        process = subprocess.Popen(cmd, cwd=str(remotion_project_dir), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, env=env)
+        try:
+            for line in process.stdout:
+                print(f"    {line.rstrip()}")
+            process.wait(timeout=600)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            raise TimeoutError("Remotion 渲染超时（10 分钟），已强制终止")
+
+    return final_video_file
 
 # ---------------- 主干 ----------------
 async def main():

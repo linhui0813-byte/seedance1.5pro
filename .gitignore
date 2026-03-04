@@ -8,3 +8,7 @@ node_modules/
 *.mp4
 *.mp3
 *.vtt
+jobs_data/
+jobs.db
+frontend/.next/
+frontend/node_modules/

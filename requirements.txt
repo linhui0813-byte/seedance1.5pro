@@ -6,3 +6,6 @@ playwright
 playwright-stealth
 python-dotenv
 certifi
+fastapi
+uvicorn[standard]
+sqlalchemy

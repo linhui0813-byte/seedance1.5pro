@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import sys
+import urllib.request
 
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 from playwright_stealth import Stealth
@@ -41,6 +42,9 @@ TITLE_CONTENT_RE = re.compile(
 
 # 剔除内嵌 HTML 标签（<span>、<br>、<b> 等）
 STRIP_HTML_RE = re.compile(r'<[^>]+>')
+
+# 1688 商品详情图片 URL 正则（ibank CDN 图片）
+IMAGE_URL_RE = re.compile(r'https?://[^"\'\s]*?cbu01\.alicdn\.com/img/ibank/[^"\'>\s]+\.(?:jpg|jpeg|png)', re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------
@@ -179,9 +183,14 @@ class NetworkInterceptor:
         self.texts: list[str] = []
         self._seen_texts: set[str] = set()
         self.h1_title: str | None = None  # 网络拦截到的 .title-content 商品标题
-
     async def on_response(self, response):
         try:
+            content_type = response.headers.get("content-type", "")
+
+            # 跳过非文本响应（图片/视频/字体等）
+            if not content_type or "text" not in content_type and "json" not in content_type and "html" not in content_type:
+                return
+
             body = await response.text()
 
             # --- <p> 标签文案拦截 ---
@@ -399,20 +408,55 @@ async def check_bot_protection(page):
 
 
 # ---------------------------------------------------------------------------
+# 步骤五：下载拦截到的商品图片
+# ---------------------------------------------------------------------------
+
+def download_images(image_urls: list[str], assets_dir: str, max_images: int = 10) -> list[str]:
+    """
+    下载拦截到的 ibank CDN 商品图片到 assets_dir。
+    返回成功下载的文件路径列表。
+    """
+    if not image_urls:
+        logger.warning("未拦截到任何商品图片")
+        return []
+
+    downloaded = []
+    for i, img_url in enumerate(image_urls[:max_images], 1):
+        ext = os.path.splitext(img_url.split("?")[0])[1] or ".jpg"
+        filename = f"image_{i:02d}{ext}"
+        filepath = os.path.join(assets_dir, filename)
+        try:
+            urllib.request.urlretrieve(img_url, filepath)
+            downloaded.append(filepath)
+            logger.info("  [下载] 图片 %d/%d: %s", i, min(len(image_urls), max_images), filename)
+        except Exception as e:
+            logger.warning("  [下载失败] 图片 %d: %s — %s", i, img_url[:60], e)
+
+    logger.info("图片下载完成: %d/%d 成功", len(downloaded), min(len(image_urls), max_images))
+    return downloaded
+
+
+# ---------------------------------------------------------------------------
 # 主流程
 # ---------------------------------------------------------------------------
 
-async def scrape_product(url: str):
+async def scrape_product(url: str, assets_dir: str = None):
     """
     主抓取流程：
       1. 创建 product_assets 文件夹
       2. 挂载网络拦截器（在 goto 之前）
       3. 真人式缓慢滚动，触发详情请求
       4. 提取文字 → 详情文案.txt
-    """
+      5. 下载商品图片
 
-    # ===== 步骤一：创建本地资产文件夹 =====
-    prepare_assets_dir()
+    Returns: {"title": str|None, "text_lines": int, "images": [str]}
+    """
+    if assets_dir is None:
+        assets_dir = ASSETS_DIR
+
+    # ===== 步骤一：确保本地资产文件夹存在 =====
+    os.makedirs(assets_dir, exist_ok=True)
+    logger.info("资产文件夹已就绪: %s", assets_dir)
 
     os.makedirs(CHROME_DATA_DIR, exist_ok=True)
 
@@ -467,14 +511,23 @@ async def scrape_product(url: str):
 
             # ===== 步骤四：提取并保存文本 =====
             logger.info("正在提取文案（网络拦截 + DOM 兜底）...")
-            text_lines = await save_text(page, interceptor.texts, ASSETS_DIR,
+            text_lines = await save_text(page, interceptor.texts, assets_dir,
                                          intercepted_h1=interceptor.h1_title)
+
+            # 提取标题用于返回
+            product_title = interceptor.h1_title
 
             # 摘要
             logger.info("=" * 50)
             logger.info("全部完成!")
-            logger.info("  文案: %d 行 → product_assets/详情文案.txt", text_lines)
+            logger.info("  文案: %d 行 → %s/详情文案.txt", text_lines, assets_dir)
             logger.info("=" * 50)
+
+            return {
+                "title": product_title,
+                "text_lines": text_lines,
+                "images": [],
+            }
 
         finally:
             await context.close()

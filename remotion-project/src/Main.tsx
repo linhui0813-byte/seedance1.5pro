@@ -111,7 +111,7 @@ export const Main: React.FC<any> = (props) => {
       </Series>
       
       {/* 背景音乐：音量设置为 0.15（15%），避免盖过人声，并开启循环 */}
-      {bgmPath && <Audio src={staticFile(bgmPath)} volume={0.18} loop={true} />}
+      {bgmPath && <Audio src={staticFile(bgmPath)} volume={0.25} loop={true} />}
 
       {/* 原来的主语音和字幕 */}
       {audioPath && <Audio src={staticFile(audioPath)} />}
