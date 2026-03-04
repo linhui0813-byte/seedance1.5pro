@@ -66,7 +66,7 @@ def generate_script_with_deepseek(assets_dir: Path = ASSETS_DIR):
         timeout=120.0,    # 读取响应超时 120 秒（默认太短，大响应容易断）
         max_retries=5,    # SDK 内部重试 5 次
     )
-    system_prompt = "你是一位高级女装种草博主...请写一段约 120-150 字的口语化短视频种草文案。不要使用 emoji，直接输出内容。"
+    system_prompt = "你是一位高级女装种草博主...请写一段约 50-60 字的口语化短视频种草文案。不要使用 emoji，直接输出内容。"
     user_prompt = f"商品详情信息：\n{detail_text}"
 
     # 带重试的 API 调用
@@ -228,7 +228,7 @@ def trigger_remotion_render(assets_dir: Path = ASSETS_DIR,
 
     # 复制生成的视频片段到 Remotion assets 并更新 render_data
     video_clips_data = []
-    for mp4_file in assets_dir.glob("*.mp4"):
+    for mp4_file in sorted(assets_dir.glob("*.mp4")):
         if mp4_file.name != "final_video.mp4":
             shutil.copy2(mp4_file, remotion_assets_dir / mp4_file.name)
             dur = get_video_duration(mp4_file)

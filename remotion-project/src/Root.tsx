@@ -5,7 +5,7 @@ import { Main } from "./Main";
 const inputProps = getInputProps();
 
 export const Root = () => {
-  const audioDurationInSeconds = (inputProps?.audioDurationInSeconds as number) || 30;
+  const audioDurationInSeconds = Math.min((inputProps?.audioDurationInSeconds as number) || 20, 20);
 
   return (
     <>
