@@ -95,6 +95,25 @@ export default function JobDetailPage() {
               生成结果
             </h2>
             <VideoPreview jobId={job.id} />
+
+            {/* 朋友圈文案 */}
+            {job.wechat_moments_copy && (
+              <div className="mt-6 p-4 bg-gradient-to-r from-pink-50 to-orange-50 border border-pink-200 rounded-lg">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="font-semibold text-pink-700">朋友圈文案</h3>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(job.wechat_moments_copy || "");
+                      alert("已复制到剪贴板！");
+                    }}
+                    className="px-3 py-1 text-sm bg-pink-500 text-white rounded-full hover:bg-pink-600 transition-colors"
+                  >
+                    一键复制
+                  </button>
+                </div>
+                <p className="text-gray-700 whitespace-pre-wrap">{job.wechat_moments_copy}</p>
+              </div>
+            )}
           </div>
         )}
       </div>

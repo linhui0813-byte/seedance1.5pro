@@ -25,6 +25,7 @@ class JobOut(BaseModel):
     error_message: str | None = None
     progress_pct: float
     final_video_path: str | None = None
+    wechat_moments_copy: str | None = None
     created_at: datetime
     updated_at: datetime
     steps: list[JobStepOut] = []

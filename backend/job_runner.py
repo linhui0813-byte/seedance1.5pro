@@ -90,6 +90,16 @@ def _run_pipeline_inner(db: Session, job_id: str):
     _update_step(db, step.id, status="completed", detail="种草文案已生成")
     _update_job(db, job_id, progress_pct=25.0)
 
+    # ===== Step 2.5: Generate WeChat Moments Copy =====
+    step = _get_step(db, job_id, "generate_moments_copy")
+    _update_step(db, step.id, status="running", detail="正在生成朋友圈文案...")
+
+    from .services.composition_service import generate_moments_copy
+    generate_moments_copy(assets_dir)
+
+    _update_step(db, step.id, status="completed", detail="朋友圈文案已生成")
+    _update_job(db, job_id, progress_pct=28.0)
+
     # ===== Step 3: Synthesize Audio =====
     step = _get_step(db, job_id, "synthesize_audio")
     _update_step(db, step.id, status="running", detail="正在合成语音与字幕...")
@@ -138,8 +148,15 @@ def _run_pipeline_inner(db: Session, job_id: str):
     from .services.composition_service import render_video
     final_path = render_video(assets_dir)
 
+    # 读取朋友圈文案
+    wechat_moments_copy = ""
+    moments_file = assets_dir / "朋友圈文案.txt"
+    if moments_file.exists():
+        wechat_moments_copy = moments_file.read_text(encoding="utf-8")
+
     _update_step(db, step.id, status="completed", detail="视频渲染完成")
     _update_job(db, job_id,
                 status="completed",
                 progress_pct=100.0,
-                final_video_path=str(final_path))
+                final_video_path=str(final_path),
+                wechat_moments_copy=wechat_moments_copy)

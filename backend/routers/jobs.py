@@ -15,12 +15,13 @@ router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
 # 管道步骤模板
 PIPELINE_STEPS = [
-    (1, "scrape",           "抓取商品详情"),
-    (2, "generate_script",  "生成种草文案"),
-    (3, "synthesize_audio", "合成语音与字幕"),
-    (4, "prepare_render",   "准备渲染数据"),
-    (5, "generate_videos",  "生成视频片段"),
-    (6, "render_video",     "渲染最终视频"),
+    (1, "scrape",              "抓取商品详情"),
+    (2, "generate_script",     "生成种草文案"),
+    (3, "generate_moments_copy", "生成朋友圈文案"),
+    (4, "synthesize_audio",   "合成语音与字幕"),
+    (5, "prepare_render",      "准备渲染数据"),
+    (6, "generate_videos",     "生成视频片段"),
+    (7, "render_video",       "渲染最终视频"),
 ]
 
 

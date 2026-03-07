@@ -29,8 +29,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # 常量配置
-MAX_POLL_RETRIES = 300       # 轮询最大重试次数（300 * 3s = 15 分钟）
-POLL_INTERVAL_SEC = 3        # 轮询间隔秒数
+MAX_POLL_RETRIES = 180       # 轮询最大重试次数（180 * 5s = 15 分钟）
+POLL_INTERVAL_SEC = 5        # 轮询间隔秒数
 API_MAX_RETRIES = 3          # API 调用最大重试次数
 
 # 懒加载 Ark 客户端（避免 import 时因缺少 API Key 而崩溃）
@@ -39,9 +39,12 @@ _client = None
 def get_client():
     global _client
     if _client is None:
+        api_key = os.environ.get("ARK_API_KEY")
+        if not api_key:
+            raise SystemExit("Error: ARK_API_KEY environment variable is not set. Please set it before running.")
         _client = Ark(
             base_url="https://ark.cn-beijing.volces.com/api/v3",
-            api_key=os.environ.get("ARK_API_KEY"),
+            api_key=api_key,
         )
     return _client
 

@@ -55,9 +55,9 @@ const SubtitleOverlay: React.FC<{ vttContent: string }> = ({ vttContent }) => {
 
         return (
           <Sequence key={index} from={startFrame} durationInFrames={duration}>
-            <div style={{ position: "absolute", bottom: "15%", left: "0", width: "100%", display: "flex", justifyContent: "center", alignItems: "center" }}>
+            <div style={{ position: "absolute", bottom: "19%", left: "0", width: "100%", display: "flex", justifyContent: "center", alignItems: "center" }}>
               <span style={{ 
-                color: "white", fontSize: 60, fontWeight: "bold", fontFamily: "sans-serif", textAlign: "center", maxWidth: "90%",
+                color: "white", fontSize: 80, fontWeight: "bold", fontFamily: "sans-serif", textAlign: "center", maxWidth: "90%",
                 textShadow: "0px 4px 10px rgba(0,0,0,0.8)", WebkitTextStroke: "2px black" 
               }}>
                 {sub.text}

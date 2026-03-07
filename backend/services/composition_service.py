@@ -15,6 +15,12 @@ def generate_script(assets_dir: Path) -> str:
     return generate_script_with_deepseek(assets_dir=assets_dir)
 
 
+def generate_moments_copy(assets_dir: Path) -> str:
+    """生成朋友圈营销文案"""
+    from video_pipeline import generate_wechat_moments_copy
+    return generate_wechat_moments_copy(assets_dir=assets_dir)
+
+
 async def synthesize_audio(assets_dir: Path) -> float:
     """合成语音和字幕，返回音频时长"""
     from video_pipeline import synthesize_audio_and_subtitles

@@ -21,6 +21,7 @@ export interface Job {
   error_message: string | null;
   progress_pct: number;
   final_video_path: string | null;
+  wechat_moments_copy: string | null;
   created_at: string;
   updated_at: string;
   steps: JobStep[];

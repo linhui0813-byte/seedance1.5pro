@@ -21,6 +21,7 @@ class Job(Base):
     error_message = Column(Text, nullable=True)
     progress_pct = Column(Float, default=0.0)
     final_video_path = Column(Text, nullable=True)
+    wechat_moments_copy = Column(Text, nullable=True)
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
